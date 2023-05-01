@@ -1,7 +1,7 @@
-type NewType<T extends any[], R> = (...args: T) => Promise<R>
+import type { PromiseFn } from '../type'
 
 export function withRetry(maxRetries = 3) {
-  return function<T extends any[], R> (fn: NewType<T, R>): NewType<T, R> {
+  return function<T extends any[], R>(fn: PromiseFn<T, R>): PromiseFn<T, R> {
     return async function retry(...args) {
       let retries = 0
       while (true) {
@@ -12,7 +12,7 @@ export function withRetry(maxRetries = 3) {
           if (retries >= maxRetries)
             throw error
           retries++
-          console.warn(`Retry ${retries} times due to error: `, error)
+          // console.warn(`Retry ${retries} times due to error: `, error)
         }
       }
     }
