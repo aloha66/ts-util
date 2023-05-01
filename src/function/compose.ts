@@ -1,17 +1,3 @@
-// export function compose<T extends any[], R>(
-//   f: NewType<T, R>,
-//   ...funcs: Array<NewType<T, R>>
-// ): NewType<T, R> {
-//   return funcs.reduce((prevFn, nextFn) => async (...args) => nextFn(await prevFn(...args)), f)
-// }
-
-// // compose函数组合
-// export function compose<T extends any[], R>(...fns: Array<(arg: NewType<T, R>) => NewType<T, R>>): (arg: NewType<T, R>) => NewType<T, R> {
-//   return function (arg: NewType<T, R>) {
-//     return fns.reduceRight((composed, f) => f(composed), arg)
-//   }
-// }
-
 type Func<T extends any[], R> = (...a: T) => R
 
 /**

@@ -1,34 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { asyncTimeout } from '../async/asyncTimeout'
-import { withRetry } from '../async'
+import { asyncTimeout, withRetry } from '../async'
+import { FAIL, SUCCESS, TIMEOUT, sleep } from '../util'
+import type { PromiseFn } from '../type'
 import { compose } from './compose'
-
-// 异步操作函数
-function asyncOperation(...args) {
-  console.log('args0',args);
-  
-  return new Promise((resolve, reject) => {
-    // 随机生成一个数字
-    const num = Math.random()
-    // 如果小于0.5，就表示成功
-    if (num < 0.5) {
-      resolve(num)
-    }
-    // 否则就表示失败
-    else {
-      reject(new Error('Operation failed'))
-    }
-  })
-}
-
-  // const composeFn = compose(asyncTimeout(2000),
-    // withRetry(4))
-    
-
-    // const composeFnDDD = await  composeFn(asyncOperation)
-
-    //  const dd = await composeFnDDD({a:2})
-    //  console.log('dd',dd);
 
 describe('compose', () => {
   it('composes from right to left', () => {
@@ -90,54 +64,172 @@ describe('compose', () => {
   })
 })
 
+// 1. 超时执行
+// 2. 错误重试
+// 3. 暂停开始
+
+function mergeAsyncAbility<T extends any[], R>(fn: PromiseFn<T, R>, options: any[]) {
+  const asyncFn = async function (...args: T): Promise<R> {
+    return await fn(...args)
+  }
+
+  return compose<PromiseFn<T, R>>(
+    ...options,
+    // withRetry(retryTimes),
+    // asyncTimeout(asyncTimeoutMs),
+  )(asyncFn)
+}
+
 describe('compose timeout or retry', () => {
-  it('compose asyncTimeout and withRetry with success at first try', async () => {
-    // create a mock function that always succeeds
-    const mockFn = vi.fn().mockResolvedValue('success')
-     
+  it('错误，全部错误，默认3次重试', async () => {
+    // create a mock function that returns a rejected promise always
+    const mockFn = vi.fn().mockRejectedValue(new Error(FAIL))
 
-    const composedFunction = await compose<() => string>(
-      asyncTimeout(2000),
-    withRetry(4),
-    )(mockFn)
+    async function target() {
+      await sleep(0)
+      return mockFn()
+    }
 
-    // compose asyncTimeout and withRetry with the mock function
-    // const composedFn = compose(asyncTimeout(1000), withRetry(2))(mockFn)
-    // expect the composed function to resolve with 'success' at first try
-    await expect(composedFunction()).resolves.toBe('success')
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry()])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(FAIL)
+    expect(mockFn).toHaveBeenCalledTimes(4)
+  })
 
-    // expect the mock function to be called once
+  it('错误，全部错误，重试4次', async () => {
+    // create a mock function that returns a rejected promise always
+    const mockFn = vi.fn().mockRejectedValue(new Error(FAIL))
+
+    async function target() {
+      await sleep(0)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry(4)])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(FAIL)
+    expect(mockFn).toHaveBeenCalledTimes(5)
+  })
+  it('错误，全部错误,优先级是超时，且超时', async () => {
+    // create a mock function that returns a rejected promise always
+    const mockFn = vi.fn().mockRejectedValue(new Error(FAIL))
+
+    async function target() {
+      await sleep(300)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry()])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(TIMEOUT)
+    expect(mockFn).toHaveBeenCalledTimes(0)
+  })
+
+  it('错误，全部错误,优先级是错误重试，且超时,错误信息是最后一次的错误信息，所以是超时和只执行了两次', async () => {
+    const mockFn = vi.fn().mockRejectedValue(new Error(FAIL))
+
+    async function target() {
+      await sleep(300)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [withRetry(), asyncTimeout(100)])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(TIMEOUT)
+    expect(mockFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('错误，两次错误，最后一次成功，优先级是超时，因累计任务时长会超过超时，所以mock只会调两次', async () => {
+    const mockFn = vi.fn().mockRejectedValueOnce(new Error(FAIL))
+      .mockRejectedValueOnce(new Error(FAIL))
+      .mockResolvedValueOnce('success')
+    async function target() {
+      await sleep(33)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry()])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(TIMEOUT)
+    expect(mockFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('错误，目标时间比预设时间慢，且功能优先级是超时，100ms后程序就会停止，mock不会被调用', async () => {
+    const mockFn = vi.fn().mockRejectedValue(new Error(TIMEOUT))
+
+    async function target() {
+      await sleep(200)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry()])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(TIMEOUT)
+    expect(mockFn).toHaveBeenCalledTimes(0)
+  })
+
+  it('错误，目标时间比预设时间慢，且功能优先级是错误重试，所以会试三次，每次的超时时间是100ms', async () => {
+    const mockFn = vi.fn().mockRejectedValue(new Error(TIMEOUT))
+
+    async function target() {
+      await sleep(200)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [withRetry(), asyncTimeout(100)])
+    await expect(connectWithAsyncAbilities()).rejects.toThrow(TIMEOUT)
+    expect(mockFn).toHaveBeenCalledTimes(3)
+  })
+
+  it('成功，没有超时，没有错误，优先级是超时,一次完成', async () => {
+    const mockFn = vi.fn().mockResolvedValue(SUCCESS)
+
+    async function target() {
+      await sleep(0)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry()])
+
+    await expect(connectWithAsyncAbilities()).resolves.toBe(SUCCESS)
+    // check that the mock was called once
     expect(mockFn).toHaveBeenCalledTimes(1)
   })
-  // // a mock async function that may fail or timeout
-  // const mockAsync = (ms: number, fail: boolean) => {
-  //   return new Promise((resolve, reject) => {
-  //     setTimeout(() => {
-  //       if (fail)
-  //         reject(new Error('Fail'))
 
-  //       else
-  //         resolve('Success')
-  //     }, ms)
-  //   })
-  // }
+  it('成功，没有超时，没有错误，优先级是错误重试,一次完成', async () => {
+    const mockFn = vi.fn().mockResolvedValue(SUCCESS)
 
-  // // a composed function that combines asyncTimeout and withRetry
-  // const composed = compose(asyncTimeout(3000), withRetry(2))
+    async function target() {
+      await sleep(0)
+      return mockFn()
+    }
 
-  // // test the success case
-  // it('should resolve the promise if it succeeds within the timeout and retries', async () => {
-  //   const result = await composed(() => mockAsync(1000, false))
-  //   expect(result).toBe('Success')
-  // })
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [withRetry(), asyncTimeout(100)])
+    await expect(connectWithAsyncAbilities()).resolves.toBe(SUCCESS)
+    // check that the mock was called once
+    expect(mockFn).toHaveBeenCalledTimes(1)
+  })
 
-  // // test the timeout case
-  // it('should reject the promise with a timeout error if it exceeds the timeout', async () => {
-  //   await expect(composed(() => mockAsync(5000, false))).rejects.toThrow('Timeout')
-  // })
+  it('成功，两次错误，最后一次成功，优先级是超时，且每个任务时间远短与超时时长', async () => {
+    // create a mock function that always succeeds
+    const mockFn = vi.fn().mockRejectedValueOnce(new Error(FAIL))
+      .mockRejectedValueOnce(new Error(FAIL))
+      .mockResolvedValueOnce('success')
+    async function target() {
+      await sleep(10)
+      return mockFn()
+    }
 
-  // // test the fail case
-  // it('should reject the promise with a fail error if it fails after the retries', async () => {
-  //   await expect(composed(() => mockAsync(1000, true))).rejects.toThrow('Fail')
-  // })
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [asyncTimeout(100), withRetry()])
+    await expect(connectWithAsyncAbilities()).resolves.toBe(SUCCESS)
+    expect(mockFn).toHaveBeenCalledTimes(3)
+  })
+
+  it('成功，两次错误，最后一次成功，优先级是错误重试，且每个任务时间远短与超时时长', async () => {
+    const mockFn = vi.fn().mockRejectedValueOnce(new Error(FAIL))
+      .mockRejectedValueOnce(new Error(FAIL))
+      .mockResolvedValueOnce('success')
+    async function target() {
+      await sleep(10)
+      return mockFn()
+    }
+
+    const connectWithAsyncAbilities = mergeAsyncAbility(target, [withRetry(), asyncTimeout(100)])
+    await expect(connectWithAsyncAbilities()).resolves.toBe(SUCCESS)
+    expect(mockFn).toHaveBeenCalledTimes(3)
+  })
 })
