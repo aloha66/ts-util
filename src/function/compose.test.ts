@@ -233,3 +233,75 @@ describe('compose timeout or retry', () => {
     expect(mockFn).toHaveBeenCalledTimes(3)
   })
 })
+
+describe('compose in class', () => {
+  function withAsyncAbilitiesDecorator<T extends any[], R>(options: { timeout?: number; maxRetries?: number } = {}) {
+    const { timeout = 100, maxRetries = 3 } = options
+    return function (_target: any, _propertyKey: string, descriptor: TypedPropertyDescriptor<PromiseFn<T, R>>) {
+      if (descriptor.value !== undefined)
+        descriptor.value = mergeAsyncAbility(descriptor.value, [asyncTimeout(timeout), withRetry(maxRetries)])
+
+      else
+        throw new Error('Only decorate methods')
+    }
+  }
+
+  it('装饰器实现,全部失败', async () => {
+    const mockFn = vi.fn().mockRejectedValue(new Error(FAIL))
+
+    class Test {
+      @withAsyncAbilitiesDecorator()
+      async connect() {
+        return mockFn()
+      }
+    }
+    const t = new Test()
+    await expect(t.connect()).rejects.toThrow(FAIL)
+    expect(mockFn).toHaveBeenCalledTimes(4)
+  })
+
+  it('装饰器实现,超时失败', async () => {
+    const mockFn = vi.fn().mockRejectedValue(new Error(FAIL))
+
+    class Test {
+      @withAsyncAbilitiesDecorator()
+      async connect() {
+        await sleep(300)
+        return mockFn()
+      }
+    }
+    const t = new Test()
+    await expect(t.connect()).rejects.toThrow(TIMEOUT)
+    expect(mockFn).toHaveBeenCalledTimes(0)
+  })
+
+  it('装饰器实现,失败两次，成功一次', async () => {
+    const mockFn = vi.fn().mockRejectedValueOnce(new Error(FAIL))
+      .mockRejectedValueOnce(new Error(FAIL))
+      .mockResolvedValueOnce(SUCCESS)
+
+    class Test {
+      @withAsyncAbilitiesDecorator()
+      async connect() {
+        return mockFn()
+      }
+    }
+    const t = new Test()
+    await expect(t.connect()).resolves.toBe(SUCCESS)
+    expect(mockFn).toHaveBeenCalledTimes(3)
+  })
+
+  it('装饰器实现，一次成功', async () => {
+    const mockFn = vi.fn().mockResolvedValue(SUCCESS)
+
+    class Test {
+      @withAsyncAbilitiesDecorator()
+      async connect() {
+        return mockFn()
+      }
+    }
+    const t = new Test()
+    await expect(t.connect()).resolves.toBe(SUCCESS)
+    expect(mockFn).toHaveBeenCalledTimes(1)
+  })
+})
